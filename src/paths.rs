@@ -4,6 +4,9 @@
 //! (or [`psmux_dir_opt`]), so client and server can never disagree about where
 //! the bookkeeping lives.
 
+/// Native path separator for the paths psmux builds by string formatting.
+pub const SEP: char = if cfg!(windows) { '\\' } else { '/' };
+
 /// User home directory: `USERPROFILE`, then the Windows profile API, then
 /// `HOMEDRIVE`+`HOMEPATH`, then `HOME`. Empty string when nothing resolves.
 ///
@@ -104,7 +107,7 @@ pub fn psmux_dir_opt() -> Option<String> {
     if home.is_empty() {
         None
     } else {
-        Some(format!("{}\\.psmux", home))
+        Some(format!("{}{SEP}.psmux", home))
     }
 }
 
@@ -116,7 +119,7 @@ pub fn psmux_dir_opt() -> Option<String> {
 /// behavior is to proceed and let the filesystem call fail gracefully, and a
 /// crash on an unset `USERPROFILE` would be worse.
 pub fn psmux_dir() -> String {
-    psmux_dir_opt().unwrap_or_else(|| "\\.psmux".to_string())
+    psmux_dir_opt().unwrap_or_else(|| format!("{SEP}.psmux"))
 }
 
 /// The data root reduced to a comparison key: separators unified and case
@@ -154,12 +157,12 @@ pub fn data_root_tag() -> String {
 /// Path to a fixed-name file directly under the data directory (e.g.
 /// `latency.log`, `last_session`, `next_session_id`, `crash.log`).
 pub fn psmux_dir_file(name: impl AsRef<str>) -> String {
-    format!("{}\\{}", psmux_dir(), name.as_ref())
+    format!("{}{SEP}{}", psmux_dir(), name.as_ref())
 }
 
 /// Path to a session's `.port` file (the TCP port its server listens on).
 pub fn port_file(session: impl AsRef<str>) -> String {
-    format!("{}\\{}.port", psmux_dir(), session.as_ref())
+    format!("{}{SEP}{}.port", psmux_dir(), session.as_ref())
 }
 
 /// Directory holding one ownership marker per server process this data dir
@@ -173,34 +176,34 @@ pub fn port_file(session: impl AsRef<str>) -> String {
 /// marker into its OWN data dir, so ownership is self-declared and needs no
 /// inspection of other processes.
 pub fn server_marker_dir() -> String {
-    format!("{}\\servers", psmux_dir())
+    format!("{}{SEP}servers", psmux_dir())
 }
 
 /// Path to one server process's ownership marker (see `server_marker_dir`).
 pub fn server_marker_file(pid: u32) -> String {
-    format!("{}\\{}", server_marker_dir(), pid)
+    format!("{}{SEP}{}", server_marker_dir(), pid)
 }
 
 /// Fallible variant of [`port_file`]: `None` when no data directory can be
 /// determined. Lets a call site early-exit on the same condition without having
 /// to know that `port_file` routes through `psmux_dir`.
 pub fn port_file_opt(session: impl AsRef<str>) -> Option<String> {
-    psmux_dir_opt().map(|dir| format!("{}\\{}.port", dir, session.as_ref()))
+    psmux_dir_opt().map(|dir| format!("{}{SEP}{}.port", dir, session.as_ref()))
 }
 
 /// Path to a session's `.key` file (the auth key for its server).
 pub fn key_file(session: impl AsRef<str>) -> String {
-    format!("{}\\{}.key", psmux_dir(), session.as_ref())
+    format!("{}{SEP}{}.key", psmux_dir(), session.as_ref())
 }
 
 /// Path to a session's `.sid` file (its stable session id).
 pub fn sid_file(session: impl AsRef<str>) -> String {
-    format!("{}\\{}.sid", psmux_dir(), session.as_ref())
+    format!("{}{SEP}{}.sid", psmux_dir(), session.as_ref())
 }
 
 /// Path to a session's `.pid` file (the liveness anchor: the server pid).
 pub fn pid_file(session: impl AsRef<str>) -> String {
-    format!("{}\\{}.pid", psmux_dir(), session.as_ref())
+    format!("{}{SEP}{}.pid", psmux_dir(), session.as_ref())
 }
 
 /// Path to the remembered host palette, shared by every server in this data
@@ -218,7 +221,7 @@ pub fn pid_file(session: impl AsRef<str>) -> String {
 /// retirement never happen. A wrong guess is self correcting: the report differs,
 /// the spares are retired exactly as before, and the new value is remembered.
 pub fn host_colors_file() -> String {
-    format!("{}\\host_colors", psmux_dir())
+    format!("{}{SEP}host_colors", psmux_dir())
 }
 
 /// Path to a standby's `.held` marker (issue #734).
@@ -230,12 +233,12 @@ pub fn host_colors_file() -> String {
 /// unclaimed with `exit-empty` off, which is exactly that state, and routing
 /// then treats it as the namespace's live, empty server.
 pub fn held_file(session: impl AsRef<str>) -> String {
-    format!("{}\\{}.held", psmux_dir(), session.as_ref())
+    format!("{}{SEP}{}.held", psmux_dir(), session.as_ref())
 }
 
 /// Path to a session's `.spawnlock` file (the warm-pool spawn lock).
 pub fn spawnlock_file(session: impl AsRef<str>) -> String {
-    format!("{}\\{}.spawnlock", psmux_dir(), session.as_ref())
+    format!("{}{SEP}{}.spawnlock", psmux_dir(), session.as_ref())
 }
 
 /// Path to a session's `.act` file: the last-activity stamp (Unix epoch
@@ -247,7 +250,7 @@ pub fn spawnlock_file(session: impl AsRef<str>) -> String {
 /// server per session, so the ranking input has to live in the shared registry
 /// where it can be read without connecting to anything (issue #603).
 pub fn activity_file(session: impl AsRef<str>) -> String {
-    format!("{}\\{}.act", psmux_dir(), session.as_ref())
+    format!("{}{SEP}{}.act", psmux_dir(), session.as_ref())
 }
 
 /// Directory holding one namespace-identity file per `-L` namespace (issue #509).
@@ -315,7 +318,7 @@ mod tests {
         // The test environment always has a home, so the data dir resolves to
         // {home}\.psmux and the two accessors agree.
         let dir = psmux_dir();
-        assert!(dir.ends_with("\\.psmux"), "got {dir:?}");
+        assert!(dir.ends_with(&format!("{SEP}.psmux")), "got {dir:?}");
         assert_eq!(psmux_dir_opt().as_deref(), Some(dir.as_str()));
     }
 
@@ -323,11 +326,11 @@ mod tests {
     fn per_session_helpers_append_name_and_suffix_to_data_dir() {
         let _lock = crate::util::lock_test_env();
         let dir = psmux_dir();
-        assert_eq!(port_file("foo"), format!("{}\\foo.port", dir));
-        assert_eq!(key_file("foo"), format!("{}\\foo.key", dir));
-        assert_eq!(sid_file("foo"), format!("{}\\foo.sid", dir));
-        assert_eq!(pid_file("foo"), format!("{}\\foo.pid", dir));
-        assert_eq!(spawnlock_file("foo"), format!("{}\\foo.spawnlock", dir));
+        assert_eq!(port_file("foo"), format!("{}{SEP}foo.port", dir));
+        assert_eq!(key_file("foo"), format!("{}{SEP}foo.key", dir));
+        assert_eq!(sid_file("foo"), format!("{}{SEP}foo.sid", dir));
+        assert_eq!(pid_file("foo"), format!("{}{SEP}foo.pid", dir));
+        assert_eq!(spawnlock_file("foo"), format!("{}{SEP}foo.spawnlock", dir));
     }
 
     #[test]
@@ -335,7 +338,7 @@ mod tests {
         let _lock = crate::util::lock_test_env();
         assert_eq!(
             psmux_dir_file("latency.log"),
-            format!("{}\\latency.log", psmux_dir())
+            format!("{}{SEP}latency.log", psmux_dir())
         );
     }
 }

@@ -1278,7 +1278,7 @@ fn drain_plugin_req(
 fn append_data_dir_report(filename: &str, base: &str, body: &str) {
     let Some(dir) = crate::paths::psmux_dir_opt() else { return };
     let _ = std::fs::create_dir_all(&dir);
-    let path = format!("{}\\{}", dir, filename);
+    let path = format!("{}{}{}", dir, crate::paths::SEP, filename);
     append_report_at(&path, base, body, DATA_DIR_REPORT_CAP_BYTES);
 }
 
@@ -1424,7 +1424,7 @@ pub(crate) fn write_startup_error_log(err: &dyn std::fmt::Display, base: &str) {
 
 /// Absolute path to `~/.psmux/server-startup.log`, or None if no home dir.
 pub(crate) fn startup_error_log_path() -> Option<String> {
-    Some(format!("{}\\server-startup.log", crate::paths::psmux_dir_opt()?))
+    Some(format!("{}{}server-startup.log", crate::paths::psmux_dir_opt()?, crate::paths::SEP))
 }
 
 /// Read the real failure reason out of a *fresh* `server-startup.log`.
@@ -1834,7 +1834,7 @@ pub(crate) fn active_pane_identity(app: &AppState) -> (usize, usize) {
 
 /// Absolute path to `~/.psmux/config-warnings.log`, or None if no home dir.
 pub(crate) fn config_warnings_log_path() -> Option<String> {
-    Some(format!("{}\\config-warnings.log", crate::paths::psmux_dir_opt()?))
+    Some(format!("{}{}config-warnings.log", crate::paths::psmux_dir_opt()?, crate::paths::SEP))
 }
 
 /// Persist non-fatal config parse warnings so the attaching client can echo

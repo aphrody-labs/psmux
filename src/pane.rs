@@ -554,23 +554,42 @@ pub fn prefer_app_execution_alias(resolved: String) -> String {
 /// taken once per process inside this cache, so the normal path spawns no
 /// probe process.
 pub fn cached_shell() -> Option<&'static str> {
-    CACHED_SHELL_PATH.get_or_init(|| {
-        let store_unusable = store_shell_unusable;
-        let which_path = |name: &str| {
-            which::which(name).ok().map(|p| p.to_string_lossy().into_owned())
-        };
-        let walk = which_path("pwsh")
-            .or_else(|| which_path("powershell"))
-            .or_else(|| which_path("cmd"))
-            .map(prefer_app_execution_alias);
-        select_default_shell(
-            shell_from_env(),
-            walk,
-            store_unusable,
-            || which_path("powershell"),
-            || which_path("cmd"),
-        )
-    }).as_deref()
+    CACHED_SHELL_PATH.get_or_init(resolve_default_shell).as_deref()
+}
+
+#[cfg(windows)]
+fn resolve_default_shell() -> Option<String> {
+    let store_unusable = store_shell_unusable;
+    let which_path = |name: &str| {
+        which::which(name).ok().map(|p| p.to_string_lossy().into_owned())
+    };
+    let walk = which_path("pwsh")
+        .or_else(|| which_path("powershell"))
+        .or_else(|| which_path("cmd"))
+        .map(prefer_app_execution_alias);
+    select_default_shell(
+        shell_from_env(),
+        walk,
+        store_unusable,
+        || which_path("powershell"),
+        || which_path("cmd"),
+    )
+}
+
+/// tmux getshell(): $SHELL when it is an absolute path to an executable that
+/// is not tmux itself (checkshell() and areshell()), else `_PATH_BSHELL`.
+#[cfg(not(windows))]
+fn resolve_default_shell() -> Option<String> {
+    use std::os::unix::fs::PermissionsExt;
+    let from_env = std::env::var("SHELL").ok().filter(|v| {
+        let path = std::path::Path::new(v.trim());
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        path.is_absolute()
+            && !matches!(name, "psmux" | "tmux" | "pmux")
+            && std::fs::metadata(path)
+                .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+    });
+    Some(from_env.unwrap_or_else(|| "/bin/sh".to_string()))
 }
 
 /// Can this process NOT start a Store (MSIX) packaged program? True under an
