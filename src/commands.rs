@@ -463,7 +463,7 @@ fn run_shell_line(
 /// directory when it is not one, as tmux's job_run does when its chdir fails
 /// (job.c:143 to :147). Spawning in a directory that does not exist would
 /// fail the whole command instead.
-pub(crate) fn resolve_run_shell_cwd(cwd: Option<&str>) -> Option<PathBuf> {
+pub(crate) fn resolve_run_shell_cwd(cwd: Option<&str>) -> Option<std::path::PathBuf> {
     let Some(cwd) = cwd.filter(|d| !d.is_empty()) else { return None };
     let home = crate::paths::home_dir();
     let dir = match cwd.strip_prefix('~') {
@@ -473,7 +473,7 @@ pub(crate) fn resolve_run_shell_cwd(cwd: Option<&str>) -> Option<PathBuf> {
     if std::path::Path::new(&dir).is_dir() {
         Some(std::env::current_dir().ok()?.join(dir))
     } else if !home.is_empty() {
-        Some(PathBuf::from(home))
+        Some(std::path::PathBuf::from(home))
     } else {
         None
     }

@@ -75,6 +75,12 @@ impl std::io::Write for QueuedPaneWriter {
 }
 
 impl PaneInputSink for QueuedPaneWriter {
+    #[cfg(not(windows))]
+    fn resize_prime_hook(&self) -> Option<Box<dyn FnMut() + Send>> {
+        None
+    }
+
+    #[cfg(windows)]
     fn resize_prime_hook(&self) -> Option<Box<dyn FnMut() + Send>> {
         let tx = self.tx.clone();
         let closed = self.closed.clone();
