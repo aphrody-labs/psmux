@@ -1434,6 +1434,7 @@ dependencies = [
  "chrono",
  "crossterm",
  "glob",
+ "libc",
  "parking_lot 0.13.0",
  "portable-pty-psmux",
  "ratatui",

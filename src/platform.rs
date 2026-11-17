@@ -324,25 +324,47 @@ impl Drop for ExitWaiter {
     }
 }
 
+/// Unix has no handle that pins a pid, so the "handle" is the pid and `wait`
+/// polls it. Callers open it only after matching the recorded creation time.
 #[cfg(not(windows))]
-pub struct ExitWaiter;
+pub struct ExitWaiter(u32);
 
 #[cfg(not(windows))]
 impl ExitWaiter {
-    pub fn open(_pid: u32) -> Option<Self> {
-        None
+    pub fn open(pid: u32) -> Option<Self> {
+        process_is_alive(pid).then_some(ExitWaiter(pid))
     }
-    pub fn wait(&self, _ms: u32) -> bool {
-        false
+
+    /// Wait up to `ms` for the process to exit. True when it has.
+    pub fn wait(&self, ms: u32) -> bool {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(ms as u64);
+        loop {
+            if !process_is_alive(self.0) {
+                return true;
+            }
+            if std::time::Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
     }
 }
 
+/// Is `pid` a running process? Signal 0 only probes (EPERM still means the
+/// process exists). A zombie is dead for every purpose here: the server the
+/// client just spawned stays one until the client reaps it.
 #[cfg(not(windows))]
-pub fn process_is_alive(_pid: u32) -> bool {
-    // Non-Windows builds do not plumb the server PID into the readiness gate;
-    // treat as alive so the gate falls back to the .port-vanish + deadline
-    // signals rather than ever false-failing.
-    true
+pub fn process_is_alive(pid: u32) -> bool {
+    if pid == 0 || pid > i32::MAX as u32 {
+        return false;
+    }
+    // SAFETY: signal 0 delivers nothing; it only checks the pid.
+    if unsafe { libc::kill(pid as libc::pid_t, 0) } != 0
+        && std::io::Error::last_os_error().raw_os_error() != Some(libc::EPERM)
+    {
+        return false;
+    }
+    !process_kill::process_is_zombie(pid)
 }
 
 /// Single-server-per-session-name lock (RAII). Holding the guard means this
@@ -3598,7 +3620,7 @@ pub mod mouse_inject {
     pub const MOUSE_MOVED: u32 = 0x0001;
     pub const MOUSE_WHEELED: u32 = 0x0004;
     pub const MOUSE_HWHEELED: u32 = 0x0008;
-    pub fn get_child_pid(_child: &dyn portable_pty::Child) -> Option<u32> { None }
+    pub fn get_child_pid(child: &dyn portable_pty::Child) -> Option<u32> { child.process_id() }
     pub fn send_mouse_event(_pid: u32, _col: i16, _row: i16, _btn: u32, _flags: u32, _reattach: bool) -> bool { false }
     pub fn send_vt_sequence(_pid: u32, _sequence: &[u8]) -> bool { false }
     pub fn query_vti_enabled(_pid: u32) -> Option<bool> { None }
@@ -4404,13 +4426,22 @@ pub mod process_kill {
 
 #[cfg(not(windows))]
 pub mod process_kill {
-    /// On non-Windows, fall back to simple kill (no wait — let the reaper handle it).
+    /// A pane child is a session leader on its own pty, so SIGHUP reaches the
+    /// shell and, through it, its jobs, as closing the pty does in tmux.
     pub fn kill_process_tree(child: &mut Box<dyn portable_pty::Child>) {
         let _ = child.kill();
     }
 
-    /// Kill by root pid — no-op off Windows (see the Windows twin, #686).
-    pub fn kill_pid_tree(_root_pid: u32) {}
+    /// Hang up `root_pid` and every descendant, leaf first, so a shell cannot
+    /// respawn a child between the signals. Windows twin: #686.
+    pub fn kill_pid_tree(root_pid: u32) {
+        let mut tree = descendants(root_pid);
+        tree.reverse();
+        tree.push(root_pid);
+        for pid in tree {
+            signal(pid, libc::SIGHUP);
+        }
+    }
 
     /// Batch kill — on non-Windows, just kill each child individually.
     pub fn kill_process_trees_batch(children: &mut [&mut Box<dyn portable_pty::Child>]) {
@@ -4419,13 +4450,108 @@ pub mod process_kill {
         }
     }
 
-    // Orphaned-server reaper stubs (issue #448) — no-ops off Windows.
+    // Orphaned-server reaper stubs (issue #448): the reaper finds servers by
+    // their Windows TCP table, which has no Unix counterpart here.
     pub fn loopback_listener_pids() -> Vec<(u32, u16)> { Vec::new() }
     pub fn loopback_peer_pid(_peer_port: u16, _our_port: u16) -> Option<u32> { None }
     pub fn loopback_server_end_closed(_server_port: u16, _our_port: u16) -> bool { false }
+
+    /// Process "creation time" is the Linux start time (`/proc/<pid>/stat`
+    /// field 22, boot relative) in 100ns units, so it compares with
+    /// [`now_process_filetime`] the way a Windows FILETIME does. Other Unixes
+    /// have no such source here and report none, which the identity checks
+    /// treat as "cannot confirm" and never kill on.
+    #[cfg(target_os = "linux")]
+    pub fn now_process_filetime() -> u64 {
+        let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+        // SAFETY: plain out parameter.
+        if unsafe { libc::clock_gettime(libc::CLOCK_BOOTTIME, &mut ts) } != 0 {
+            return 0;
+        }
+        ts.tv_sec as u64 * 10_000_000 + ts.tv_nsec as u64 / 100
+    }
+
+    #[cfg(not(target_os = "linux"))]
     pub fn now_process_filetime() -> u64 { 0 }
+
+    #[cfg(target_os = "linux")]
+    pub fn process_creation_time(pid: u32) -> Option<u64> {
+        let ticks: u64 = proc_stat_fields(pid)?.get(19)?.parse().ok()?;
+        // SAFETY: sysconf has no preconditions.
+        let hz = unsafe { libc::sysconf(libc::_SC_CLK_TCK) }.max(1) as u64;
+        // Never 0: callers store 0 for "unknown".
+        Some((ticks * 10_000_000 / hz).max(1))
+    }
+
+    #[cfg(not(target_os = "linux"))]
     pub fn process_creation_time(_pid: u32) -> Option<u64> { None }
-    pub fn terminate_server_pid(_pid: u32, _max_creation_ft: Option<u64>) {}
+
+    /// Same contract as the Windows twin: with a cutoff, a pid created after
+    /// it is a reused number and is left alone.
+    pub fn terminate_server_pid(pid: u32, max_creation_ft: Option<u64>) {
+        if let Some(max) = max_creation_ft {
+            if !process_creation_time(pid).is_some_and(|c| c <= max) {
+                return;
+            }
+        }
+        signal(pid, libc::SIGKILL);
+    }
+
+    pub(crate) fn process_is_zombie(pid: u32) -> bool {
+        #[cfg(target_os = "linux")]
+        {
+            proc_stat_fields(pid).is_some_and(|f| f.first().map(String::as_str) == Some("Z"))
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = pid;
+            false
+        }
+    }
+
+    fn signal(pid: u32, sig: libc::c_int) {
+        if pid > 1 && pid <= i32::MAX as u32 {
+            // SAFETY: a plain signal to a pid; a stale pid is ESRCH.
+            unsafe { libc::kill(pid as libc::pid_t, sig) };
+        }
+    }
+
+    /// The fields of `/proc/<pid>/stat` from the state (field 3) on. The comm
+    /// field before it may hold spaces and parentheses, so it is skipped by
+    /// its last `)`.
+    #[cfg(target_os = "linux")]
+    fn proc_stat_fields(pid: u32) -> Option<Vec<String>> {
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        let rest = stat.get(stat.rfind(')')? + 1..)?;
+        Some(rest.split_whitespace().map(str::to_string).collect())
+    }
+
+    /// Every descendant of `root`, parents before children.
+    #[cfg(target_os = "linux")]
+    fn descendants(root: u32) -> Vec<u32> {
+        let mut children: std::collections::HashMap<u32, Vec<u32>> = std::collections::HashMap::new();
+        if let Ok(dir) = std::fs::read_dir("/proc") {
+            for entry in dir.flatten() {
+                let Some(pid) = entry.file_name().to_str().and_then(|n| n.parse::<u32>().ok()) else { continue };
+                let ppid = proc_stat_fields(pid).and_then(|f| f.get(1)?.parse::<u32>().ok());
+                if let Some(ppid) = ppid {
+                    children.entry(ppid).or_default().push(pid);
+                }
+            }
+        }
+        let mut out = Vec::new();
+        let mut next = vec![root];
+        while let Some(pid) = next.pop() {
+            for &child in children.get(&pid).into_iter().flatten() {
+                out.push(child);
+                next.push(child);
+            }
+        }
+        out
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn descendants(_root: u32) -> Vec<u32> { Vec::new() }
 }
 
 // ---------------------------------------------------------------------------

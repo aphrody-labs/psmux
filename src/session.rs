@@ -480,7 +480,7 @@ impl CounterLock {
                 Err(e) if e.kind() == ErrorKind::NotFound && !made_dir => {
                     made_dir = true;
                     match std::path::Path::new(&path).parent() {
-                        Some(parent) if std::fs::create_dir_all(parent).is_ok() => {}
+                        Some(parent) if crate::paths::create_data_dir_all(parent).is_ok() => {}
                         _ => return CounterLock { path },
                     }
                 }
@@ -524,7 +524,7 @@ pub fn allocate_session_id() -> usize {
 /// Write a `.sid` file recording the session ID for this session.
 pub fn write_session_id_file(port_file_base: &str, session_id: usize) {
     let sid_path = crate::paths::sid_file(port_file_base);
-    let _ = std::fs::write(&sid_path, session_id.to_string());
+    let _ = crate::paths::write_private(&sid_path, session_id.to_string());
 }
 
 /// Remove the `.sid` file for a session. Also removes the twin `.pid` file
@@ -590,7 +590,7 @@ pub fn write_session_pid_file(port_file_base: &str, pid: u32) {
     // `pid:creation_filetime` — same body as ensure_session_registry_files, so a
     // freshly renamed session is force-kill-identifiable before the next re-ensure.
     let creation = crate::platform::process_kill::process_creation_time(pid).unwrap_or(0);
-    let _ = std::fs::write(&pid_path, format_pid_file_contents(pid, creation));
+    let _ = crate::paths::write_private(&pid_path, format_pid_file_contents(pid, creation));
 }
 
 /// Remove the `.pid` file for a session.
@@ -609,7 +609,7 @@ pub fn remove_session_pid_file(port_file_base: &str) {
 /// inherit a dead process's claim.
 pub fn write_server_marker(pid: u32) {
     let dir = crate::paths::server_marker_dir();
-    if std::fs::create_dir_all(&dir).is_err() {
+    if crate::paths::create_data_dir_all(&dir).is_err() {
         return;
     }
     let creation = crate::platform::process_kill::process_creation_time(pid).unwrap_or(0);
@@ -1469,7 +1469,7 @@ pub fn kill_marker_path(dir: &Path, scope: KillScope) -> std::path::PathBuf {
 pub fn write_kill_marker(dir: &Path, scope: KillScope, when: u64) {
     let path = kill_marker_path(dir, scope);
     let Some(parent) = path.parent() else { return };
-    if std::fs::create_dir_all(parent).is_err() {
+    if crate::paths::create_data_dir_all(parent).is_err() {
         return;
     }
     let tmp = path.with_extension(format!("tmp{}", std::process::id()));
@@ -1690,7 +1690,7 @@ pub fn ensure_namespace_instance_in(
 /// false only on an unexpected I/O failure.
 fn write_token_if_missing(path: &Path, token: &str) -> bool {
     if let Some(parent) = path.parent() {
-        if std::fs::create_dir_all(parent).is_err() {
+        if crate::paths::create_data_dir_all(parent).is_err() {
             return false;
         }
     }

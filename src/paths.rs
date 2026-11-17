@@ -154,6 +154,40 @@ pub fn data_root_tag() -> String {
     format!("{:016x}", h.finish())
 }
 
+/// `create_dir_all` for the data directory and what lives under it. On Unix a
+/// directory this creates is owner only (0700), as tmux does for its socket
+/// directory: the `.key` files in it are the credentials of every server. An
+/// existing directory keeps the mode it has.
+pub fn create_data_dir_all(dir: impl AsRef<std::path::Path>) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new().recursive(true).mode(0o700).create(dir)
+    }
+    #[cfg(not(unix))]
+    std::fs::create_dir_all(dir)
+}
+
+/// `std::fs::write` for the registry files (`.key`, `.port`, `.sid`, `.pid`).
+/// On Unix a file this creates is owner only (0600); one that exists is
+/// rewritten in place and keeps its mode.
+pub fn write_private(path: impl AsRef<std::path::Path>, contents: impl AsRef<[u8]>) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?
+            .write_all(contents.as_ref())
+    }
+    #[cfg(not(unix))]
+    std::fs::write(path, contents)
+}
+
 /// Path to a fixed-name file directly under the data directory (e.g.
 /// `latency.log`, `last_session`, `next_session_id`, `crash.log`).
 pub fn psmux_dir_file(name: impl AsRef<str>) -> String {

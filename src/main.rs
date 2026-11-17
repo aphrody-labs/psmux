@@ -2343,6 +2343,13 @@ fn run_main_with(argv: Vec<String>, alias_expanded: bool) -> io::Result<()> {
             "server" => {
                 // #798: every server process starts here; only per-session goes on.
                 crate::server::shared::gate_server_process();
+                // A server outlives the client that spawned it: leave the
+                // client's session and process group, so a hangup or Ctrl+C
+                // aimed at the client's terminal never reaches it. Fails only
+                // when already a group leader, which is as detached as it gets.
+                #[cfg(unix)]
+                // SAFETY: setsid takes no arguments and touches no memory.
+                unsafe { libc::setsid(); }
                 // Internal command - run headless server (used when spawning background server)
                 let name = args.iter().position(|a| a == "-s").and_then(|i| args.get(i+1)).map(|s| s.clone()).unwrap_or_else(|| "default".to_string());
                 // Last line of defence for a name no registry file can carry:
@@ -2875,7 +2882,8 @@ fn run_main_with(argv: Vec<String>, alias_expanded: bool) -> io::Result<()> {
                     cmd.stdin(std::process::Stdio::null());
                     cmd.stdout(std::process::Stdio::null());
                     cmd.stderr(std::process::Stdio::null());
-                    let _child = cmd.spawn().map_err(|e| io::Error::new(io::ErrorKind::Other, format!("failed to spawn server: {e}")))?;
+                    let child = cmd.spawn().map_err(|e| io::Error::new(io::ErrorKind::Other, format!("failed to spawn server: {e}")))?;
+                    server_pid = Some(child.id());
                 }
                 } // end if !claimed_warm (cold path)
                 } // end else (not PSMUX_REMOTE_ATTACH)
@@ -6941,7 +6949,7 @@ fn run_control_mode(mode: u8) -> io::Result<()> {
     // kinds, byte counts, timings and errors only: never what was read from
     // stdin, never what the server sent, never environment values.
     let psmux_dir = crate::paths::psmux_dir();
-    let _ = std::fs::create_dir_all(&psmux_dir);
+    let _ = crate::paths::create_data_dir_all(&psmux_dir);
     let cc_log_file_path = crate::paths::psmux_dir_file("cc_debug.log");
     let cc_log_path: Option<String> = if cc_debug_enabled() {
         Some(cc_log_file_path)

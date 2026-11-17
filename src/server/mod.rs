@@ -470,7 +470,7 @@ fn ensure_session_registry_files(app: &AppState) {
     if app.is_warm_server() && !std::path::Path::new(&dir).is_dir() {
         return;
     }
-    let _ = std::fs::create_dir_all(&dir);
+    let _ = crate::paths::create_data_dir_all(&dir);
 
     let base = app.port_file_base();
     // A file left by a session spelled differently would keep its spelling
@@ -492,14 +492,14 @@ fn ensure_session_registry_files(app: &AppState) {
         .map(|s| s.trim() != app.session_key)
         .unwrap_or(true)
     {
-        let _ = std::fs::write(&key_path, &app.session_key);
+        let _ = crate::paths::write_private(&key_path, &app.session_key);
     }
 
     if std::fs::read_to_string(&sid_path)
         .map(|s| s.trim() != sid_value)
         .unwrap_or(true)
     {
-        let _ = std::fs::write(&sid_path, &sid_value);
+        let _ = crate::paths::write_private(&sid_path, &sid_value);
     }
 
     // Record this server's OS process ID (issue #448). Written together with
@@ -520,7 +520,7 @@ fn ensure_session_registry_files(app: &AppState) {
         .map(|s| s.trim() != pid_value)
         .unwrap_or(true)
     {
-        let _ = std::fs::write(&pid_path, &pid_value);
+        let _ = crate::paths::write_private(&pid_path, &pid_value);
     }
 
     crate::startup_trace::mark("srv.reg.pid");
@@ -547,7 +547,7 @@ fn ensure_session_registry_files(app: &AppState) {
         .map(|s| s.trim() != port_value)
         .unwrap_or(true)
     {
-        let _ = std::fs::write(&port_path, &port_value);
+        let _ = crate::paths::write_private(&port_path, &port_value);
     }
 }
 
@@ -1277,7 +1277,7 @@ fn drain_plugin_req(
 /// drives every sweep is already gone.
 fn append_data_dir_report(filename: &str, base: &str, body: &str) {
     let Some(dir) = crate::paths::psmux_dir_opt() else { return };
-    let _ = std::fs::create_dir_all(&dir);
+    let _ = crate::paths::create_data_dir_all(&dir);
     let path = format!("{}{}{}", dir, crate::paths::SEP, filename);
     append_report_at(&path, base, body, DATA_DIR_REPORT_CAP_BYTES);
 }
@@ -2656,7 +2656,7 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
     // resurrect a namespace that was removed on purpose. The standby's
     // watchdog ends it instead (`check_warm_standby_orphaned`).
     if !(app.is_warm_server() && warm_spawner().is_some()) {
-        let _ = std::fs::create_dir_all(&dir);
+        let _ = crate::paths::create_data_dir_all(&dir);
     }
 
     // Generate a random session key for security
@@ -2681,12 +2681,7 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
     // the matching content below and never rewrites it.
     {
         let keypath = crate::paths::key_file(&app.port_file_base());
-        let _ = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&keypath)
-            .map(|mut f| std::io::Write::write_all(&mut f, session_key.as_bytes()));
+        let _ = crate::paths::write_private(&keypath, session_key.as_bytes());
     }
     crate::startup_trace::mark("srv.keyfile");
 
@@ -5741,7 +5736,7 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
                         // a key that does not match this server (seen as "Invalid
                         // session key" on a later command). app.session_key is correct.
                         let _ = std::fs::remove_file(&old_keypath);
-                        let _ = std::fs::write(&new_keypath, &app.session_key);
+                        let _ = crate::paths::write_private(&new_keypath, &app.session_key);
                         // The activity stamp follows the session across the rename
                         // (issue #603); it must move BEFORE remove_session_id_file
                         // drops the old base's stamp with its .sid/.pid.
@@ -5757,7 +5752,7 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
                         // read next must already exist when it appears (issue #496).
                         // Entries left under another spelling take this one (#774).
                         crate::session::heal_registry_spelling(&new_base);
-                        let _ = std::fs::write(&new_path, port.to_string());
+                        let _ = crate::paths::write_private(&new_path, port.to_string());
                     }
                     app.session_name = name;
                     // Move the single-server-per-name guard onto the new name, or the
@@ -5841,7 +5836,7 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
                         // a key that does not match this server (seen as "Invalid
                         // session key" on a later command). app.session_key is correct.
                         let _ = std::fs::remove_file(&old_keypath);
-                        let _ = std::fs::write(&new_keypath, &app.session_key);
+                        let _ = crate::paths::write_private(&new_keypath, &app.session_key);
                         // The activity stamp follows the session across the rename
                         // (issue #603); it must move BEFORE remove_session_id_file
                         // drops the old base's stamp with its .sid/.pid.
@@ -5857,7 +5852,7 @@ pub fn run_server(session_name: String, socket_name: Option<String>, initial_com
                         // read next must already exist when it appears (issue #496).
                         // Entries left under another spelling take this one (#774).
                         crate::session::heal_registry_spelling(&new_base);
-                        let _ = std::fs::write(&new_path, port.to_string());
+                        let _ = crate::paths::write_private(&new_path, port.to_string());
                     }
                     app.session_name = name;
                     // It has a session now, so formats run from here on see it.
